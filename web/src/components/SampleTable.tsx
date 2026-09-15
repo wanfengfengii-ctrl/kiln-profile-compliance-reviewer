@@ -5,6 +5,15 @@ interface Props {
   onChange: (samples: SampleInput[]) => void;
 }
 
+/** 大整数安全的 +step 建议值；无法解析时返回空串由用户填写。 */
+function nextInt(raw: string, step: bigint): string {
+  try {
+    return (BigInt(raw.trim()) + step).toString();
+  } catch {
+    return "";
+  }
+}
+
 /** 可编辑的时间-温度采样表。 */
 export function SampleTable({ samples, onChange }: Props) {
   const update = (i: number, key: keyof SampleInput, value: string) => {
@@ -15,10 +24,9 @@ export function SampleTable({ samples, onChange }: Props) {
   const remove = (i: number) => onChange(samples.filter((_, j) => j !== i));
   const add = () => {
     const last = samples[samples.length - 1];
-    const timeNum = last ? Number(last.time) : NaN;
     onChange([
       ...samples,
-      { time: Number.isFinite(timeNum) ? String(timeNum + 600) : "", temp: "" },
+      { time: last ? nextInt(last.time, 600n) : "0", temp: "" },
     ]);
   };
 

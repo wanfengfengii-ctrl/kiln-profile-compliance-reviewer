@@ -1,21 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDetail, parseIntField } from "../api";
-
-describe("parseIntField", () => {
-  it("把整数字面量解析为 number", () => {
-    expect(parseIntField("120")).toBe(120);
-    expect(parseIntField("  42 ")).toBe(42);
-    expect(parseIntField("-3")).toBe(-3);
-    expect(parseIntField("+7")).toBe(7);
-  });
-
-  it("非整数字面量原样返回，交由服务端拒绝", () => {
-    expect(parseIntField("1.5")).toBe("1.5");
-    expect(parseIntField("abc")).toBe("abc");
-    expect(parseIntField("")).toBe("");
-    expect(parseIntField("1e3")).toBe("1e3");
-  });
-});
+import { formatDetail } from "../api";
 
 describe("formatDetail", () => {
   it("处理字符串 detail", () => {

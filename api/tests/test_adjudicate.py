@@ -34,7 +34,7 @@ def test_temperature_violation_above_and_below():
     result = adjudicate(stages, samples)
     assert result["conclusion"] == "返烧"
     temps = [v for v in result["violations"] if v["type"] == "temperature"]
-    assert [v["time"] for v in temps] == [0, 100]
+    assert [v["time"] for v in temps] == ["0", "100"]
     assert temps[0]["temperature"] == "9.9"
     assert temps[0]["min_temp"] == "10"
     assert temps[0]["max_temp"] == "50"
@@ -65,7 +65,7 @@ def test_heating_rate_violation():
     rates = [v for v in result["violations"] if v["type"] == "rate"]
     assert len(rates) == 1
     v = rates[0]
-    assert v["start_time"] == 0 and v["end_time"] == 10
+    assert v["start_time"] == "0" and v["end_time"] == "10"
     assert v["direction"] == "heating"
     assert v["measured"] == "120"  # 20 * 60 / 10
     assert v["limit"] == "5.0"
@@ -134,7 +134,7 @@ def test_violation_ordering_temperature_then_rate():
     result = adjudicate(stages, samples)
     types = [v["type"] for v in result["violations"]]
     assert types == ["temperature", "rate", "rate"]
-    rate_ends = [v["end_time"] for v in result["violations"] if v["type"] == "rate"]
+    rate_ends = [int(v["end_time"]) for v in result["violations"] if v["type"] == "rate"]
     assert rate_ends == sorted(rate_ends)
 
 
@@ -143,7 +143,7 @@ def test_temperature_violations_sorted_by_time():
     samples = [sample(0, "50"), sample(40, "99"), sample(100, "5")]
     result = adjudicate(stages, samples)
     times = [v["time"] for v in result["violations"] if v["type"] == "temperature"]
-    assert times == [0, 40]
+    assert times == ["0", "40"]
 
 
 def test_decimal_precision_exact_division():
@@ -159,15 +159,34 @@ def test_decimal_precision_exact_division():
 
 
 def test_decimal_precision_repeating_division():
-    # 60/7 = 8.571428571428571428571428571（28 位十进制精度）
-    stages = [stage(0, 10, "0", "100", heat="8.571428571428571428571428571")]
+    # 60/7 = 8.571428571428571...（无限循环），判定须按有理数精确比较：
+    # 任何小于真值的限制（哪怕贴近）都必须判违规，大于真值才合规。
     samples = [sample(0, "0"), sample(7, "1"), sample(10, "1")]
-    assert adjudicate(stages, samples)["conclusion"] == "放行"
-    stages2 = [stage(0, 10, "0", "100", heat="8.5")]
-    result = adjudicate(stages2, samples)
+    # 28 位舍入值仍小于 60/7 真值 -> 返烧（旧实现曾误判放行）
+    stages = [stage(0, 10, "0", "100", heat="8.571428571428571428571428571")]
+    assert adjudicate(stages, samples)["conclusion"] == "返烧"
+    # 29 位、仍小于真值 -> 返烧
+    stages = [stage(0, 10, "0", "100", heat="8.5714285714285714285714285714")]
+    result = adjudicate(stages, samples)
+    assert result["conclusion"] == "返烧"
     rates = [v for v in result["violations"] if v["type"] == "rate"]
-    assert rates[0]["measured"] == "8.571428571428571428571428571"
-    assert rates[0]["limit"] == "8.5"
+    assert rates[0]["measured"] == "8.5714285714285714285714285714285714285714285714286"
+    assert rates[0]["limit"] == "8.5714285714285714285714285714"
+    # 略高于真值 -> 放行
+    stages = [stage(0, 10, "0", "100", heat="8.5714285714285714285714285715")]
+    assert adjudicate(stages, samples)["conclusion"] == "放行"
+
+
+def test_decimal_exact_boundary_terminating():
+    # 1°C/8s = 7.5 精确可表示：等于限制合规，略低即违规
+    samples = [sample(0, "0"), sample(8, "1"), sample(10, "1")]
+    stages = [stage(0, 10, "0", "100", heat="7.5")]
+    assert adjudicate(stages, samples)["conclusion"] == "放行"
+    stages = [stage(0, 10, "0", "100", heat="7.49999999999999999999999999999")]
+    result = adjudicate(stages, samples)
+    assert result["conclusion"] == "返烧"
+    rates = [v for v in result["violations"] if v["type"] == "rate"]
+    assert rates[0]["measured"] == "7.5"
 
 
 def test_zero_rate_never_violates():
@@ -190,3 +209,22 @@ def test_rate_violation_fields_complete():
         "limit",
         "stage_index",
     }
+
+
+def test_huge_integer_seconds_beyond_ieee754():
+    # 超出 Number.MAX_SAFE_INTEGER 的秒数必须精确处理，不得被改写
+    big1 = 9007199254740993  # 2**53 + 1，浮点无法精确表示
+    big2 = 90071992547409930
+    stages = [
+        stage(0, big1, "15", "260"),
+        stage(big1, big2, "250", "950"),
+    ]
+    samples = [sample(0, "20"), sample(big1, "260"), sample(big2, "270")]
+    result = adjudicate(stages, samples)
+    assert result["conclusion"] == "放行"
+    # 违规时间点也以精确字符串返回
+    bad = [sample(0, "20"), sample(big1, "100"), sample(big2, "270")]
+    result = adjudicate(stages, bad)
+    assert result["conclusion"] == "返烧"
+    temps = [v for v in result["violations"] if v["type"] == "temperature"]
+    assert temps[0]["time"] == "9007199254740993"

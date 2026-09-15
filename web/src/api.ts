@@ -2,16 +2,6 @@ import { AdjudicationResult, SampleInput, StageInput } from "./types";
 
 export class ApiError extends Error {}
 
-/**
- * 整数秒字段：可解析为整数字面量则发送 number，
- * 否则原样发送，由服务端校验并拒绝（服务端为唯一权威）。
- */
-export function parseIntField(raw: string): number | string {
-  const t = raw.trim();
-  if (/^[+-]?\d+$/.test(t)) return Number(t);
-  return t;
-}
-
 interface ErrorDetailItem {
   loc?: (string | number)[];
   msg?: string;
@@ -40,17 +30,19 @@ export async function adjudicate(
   stages: StageInput[],
   samples: SampleInput[]
 ): Promise<AdjudicationResult> {
+  // 整数秒以字符串原样发送：超出 Number.MAX_SAFE_INTEGER 的秒数不会被
+  // 浮点改写；服务端负责校验并裁决（服务端为唯一权威）。
   const body = {
     stages: stages.map((s) => ({
-      start: parseIntField(s.start),
-      end: parseIntField(s.end),
+      start: s.start.trim(),
+      end: s.end.trim(),
       min_temp: s.min_temp.trim(),
       max_temp: s.max_temp.trim(),
       max_heat_rate: s.max_heat_rate.trim(),
       max_cool_rate: s.max_cool_rate.trim(),
     })),
     samples: samples.map((s) => ({
-      time: parseIntField(s.time),
+      time: s.time.trim(),
       temp: s.temp.trim(),
     })),
   };

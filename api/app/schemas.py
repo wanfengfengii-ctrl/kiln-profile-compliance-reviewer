@@ -10,16 +10,36 @@
 from __future__ import annotations
 
 import math
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, List
 
-from annotated_types import Ge
-from pydantic import BaseModel, Field, Strict
+from pydantic import BaseModel, Field
 from pydantic import field_validator, model_validator
-from typing_extensions import Annotated
 
-# 非负整数秒：严格 int（拒绝布尔、浮点、字符串），且 >= 0
-NonNegIntSeconds = Annotated[int, Strict(), Ge(0)]
+_INT_SECONDS_RE = re.compile(r"[+-]?\d+")
+
+
+def to_non_neg_int_seconds(value: Any) -> int:
+    """非负整数秒：接受 JSON 整数或十进制整数字符串。
+
+    字符串形式可无损承载超出 IEEE 754 安全整数范围的秒数（前端不经
+    Number() 转换，原样透传），拒绝布尔、浮点与非整数字符串。
+    """
+    if isinstance(value, bool):
+        raise ValueError("必须是非负整数秒，不能是布尔值")
+    if isinstance(value, int):
+        n = value
+    elif isinstance(value, str):
+        t = value.strip()
+        if not _INT_SECONDS_RE.fullmatch(t):
+            raise ValueError(f"必须是非负整数秒，收到: {value!r}")
+        n = int(t)
+    else:
+        raise ValueError(f"必须是非负整数秒，收到类型: {type(value).__name__}")
+    if n < 0:
+        raise ValueError(f"必须是非负整数秒，收到: {n}")
+    return n
 
 
 def to_finite_decimal(value: Any) -> Decimal:
@@ -49,13 +69,16 @@ def to_finite_decimal(value: Any) -> Decimal:
 class StageIn(BaseModel):
     """一个连续工艺阶段：[start, end)，仅末阶段额外包含 end。"""
 
-    start: NonNegIntSeconds
-    end: NonNegIntSeconds
+    start: int
+    end: int
     min_temp: Decimal
     max_temp: Decimal
     max_heat_rate: Decimal
     max_cool_rate: Decimal
 
+    _int_seconds = field_validator("start", "end", mode="before")(
+        to_non_neg_int_seconds
+    )
     _decimals = field_validator(
         "min_temp", "max_temp", "max_heat_rate", "max_cool_rate", mode="before"
     )(to_finite_decimal)
@@ -78,9 +101,10 @@ class StageIn(BaseModel):
 class SampleIn(BaseModel):
     """一个时间-温度采样点。"""
 
-    time: NonNegIntSeconds
+    time: int
     temp: Decimal
 
+    _int_seconds = field_validator("time", mode="before")(to_non_neg_int_seconds)
     _decimals = field_validator("temp", mode="before")(to_finite_decimal)
 
 

@@ -34,8 +34,8 @@ def adjudicate_endpoint(req: AdjudicateRequest) -> dict:
         "violations": result["violations"],
         "stages": [
             {
-                "start": s.start,
-                "end": s.end,
+                "start": str(s.start),
+                "end": str(s.end),
                 "min_temp": dec_str(s.min_temp),
                 "max_temp": dec_str(s.max_temp),
                 "max_heat_rate": dec_str(s.max_heat_rate),
@@ -43,5 +43,6 @@ def adjudicate_endpoint(req: AdjudicateRequest) -> dict:
             }
             for s in req.stages
         ],
-        "samples": [{"time": s.time, "temp": dec_str(s.temp)} for s in req.samples],
+        # 整数秒以十进制字符串返回，超出 IEEE 754 安全整数范围也不丢精度
+        "samples": [{"time": str(s.time), "temp": dec_str(s.temp)} for s in req.samples],
     }

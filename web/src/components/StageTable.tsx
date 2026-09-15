@@ -14,6 +14,15 @@ interface Props {
   onChange: (stages: StageInput[]) => void;
 }
 
+/** 大整数安全的 +step 建议值；无法解析时返回空串由用户填写。 */
+function nextInt(raw: string, step: bigint): string {
+  try {
+    return (BigInt(raw.trim()) + step).toString();
+  } catch {
+    return "";
+  }
+}
+
 /** 可编辑的连续工艺阶段表。 */
 export function StageTable({ stages, onChange }: Props) {
   const update = (i: number, key: keyof StageInput, value: string) => {
@@ -25,12 +34,11 @@ export function StageTable({ stages, onChange }: Props) {
   const add = () => {
     const last = stages[stages.length - 1];
     const start = last ? last.end : "0";
-    const endNum = Number(start);
     onChange([
       ...stages,
       {
         start,
-        end: Number.isFinite(endNum) ? String(endNum + 600) : "",
+        end: nextInt(start, 600n),
         min_temp: "0",
         max_temp: "1000",
         max_heat_rate: "5.0",

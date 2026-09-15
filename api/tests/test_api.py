@@ -42,10 +42,11 @@ def test_valid_release_and_echo():
     data = resp.json()
     assert data["conclusion"] == "放行"
     assert data["violations"] == []
-    # 折线、结论、下载 JSON 取自同次响应：响应内回传裁决所用数据
-    assert data["stages"][0]["start"] == 0
+    # 折线、结论、下载 JSON 取自同次响应：响应内回传裁决所用数据；
+    # 整数秒以十进制字符串返回，大整数不丢精度
+    assert data["stages"][0]["start"] == "0"
     assert data["stages"][1]["max_temp"] == "950"
-    assert data["samples"][-1] == {"time": 12600, "temp": "880"}
+    assert data["samples"][-1] == {"time": "12600", "temp": "880"}
     assert len(data["samples"]) == 12
 
 
@@ -62,13 +63,13 @@ def test_refire_with_ordered_violations():
     violations = data["violations"]
     assert [v["type"] for v in violations] == ["temperature", "rate", "rate"]
     temp_v = violations[0]
-    assert temp_v["time"] == 1200 and temp_v["temperature"] == "500"
+    assert temp_v["time"] == "1200" and temp_v["temperature"] == "500"
     assert temp_v["min_temp"] == "15" and temp_v["max_temp"] == "260"
     heat_v, cool_v = violations[1], violations[2]
-    assert (heat_v["start_time"], heat_v["end_time"]) == (0, 1200)
+    assert (heat_v["start_time"], heat_v["end_time"]) == ("0", "1200")
     assert heat_v["direction"] == "heating"
     assert heat_v["measured"] == "24" and heat_v["limit"] == "4.0"
-    assert (cool_v["start_time"], cool_v["end_time"]) == (1200, 2400)
+    assert (cool_v["start_time"], cool_v["end_time"]) == ("1200", "2400")
     assert cool_v["direction"] == "cooling"
     assert cool_v["measured"] == "16" and cool_v["limit"] == "2.0"
 
@@ -92,7 +93,9 @@ def test_numeric_temperatures_accepted():
         lambda b: b["stages"][0].update(start=1.5),
         lambda b: b["stages"][0].update(start=-1),
         lambda b: b["stages"][0].update(start=True),
-        lambda b: b["stages"][0].update(start="0"),
+        lambda b: b["stages"][0].update(start="abc"),
+        lambda b: b["stages"][0].update(start="1.5"),
+        lambda b: b["stages"][0].update(start="-8"),
         lambda b: b["stages"][0].update(end=0),
         # 阶段不首尾相接
         lambda b: b["stages"][1].update(start=3599),
@@ -107,6 +110,7 @@ def test_numeric_temperatures_accepted():
         lambda b: b["stages"][0].update(max_cool_rate="-Infinity"),
         # 采样时间：非整数、负数、不严格递增、越界、不覆盖首末端点
         lambda b: b["samples"][1].update(time=1200.5),
+        lambda b: b["samples"][1].update(time="1200.5"),
         lambda b: b["samples"][1].update(time=-3),
         lambda b: b["samples"][1].update(time=0),
         lambda b: b["samples"][1].update(time=12601),
@@ -130,6 +134,67 @@ def test_invalid_input_rejected(mutate):
     resp = post(body)
     assert resp.status_code == 422
     assert resp.json()["detail"]  # 返回可读的错误定位信息
+
+
+def test_integer_seconds_accepted_as_string():
+    body = {
+        "stages": [{"start": "0", "end": "60", "min_temp": "0", "max_temp": "100",
+                    "max_heat_rate": "10", "max_cool_rate": "10"}],
+        "samples": [{"time": "0", "temp": "20"}, {"time": "60", "temp": "30"}],
+    }
+    resp = post(body)
+    assert resp.status_code == 200
+    assert resp.json()["conclusion"] == "放行"
+
+
+def test_huge_integer_seconds_exact_end_to_end():
+    # 超出 Number.MAX_SAFE_INTEGER 的秒数：JSON 整数与字符串两种形式都必须
+    # 精确接受、精确裁决、精确回传，不得被改写
+    big1 = 9007199254740993   # 2**53 + 1
+    big2 = 90071992547409930
+    stages = [
+        {"start": 0, "end": big1, "min_temp": "15", "max_temp": "260",
+         "max_heat_rate": "5.0", "max_cool_rate": "5.0"},
+        {"start": str(big1), "end": str(big2), "min_temp": "250", "max_temp": "950",
+         "max_heat_rate": "5.0", "max_cool_rate": "5.0"},
+    ]
+    samples = [
+        {"time": 0, "temp": "20"},
+        {"time": str(big1), "temp": "260"},
+        {"time": big2, "temp": "270"},
+    ]
+    resp = post({"stages": stages, "samples": samples})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["conclusion"] == "放行"
+    assert data["stages"][0]["end"] == "9007199254740993"
+    assert data["stages"][1]["start"] == "9007199254740993"
+    assert data["samples"][1]["time"] == "9007199254740993"
+    assert data["samples"][2]["time"] == "90071992547409930"
+
+
+def test_rate_limit_near_60_over_7_adjudicated_exactly():
+    # 7 秒升温 1°C：真实速率 60/7 = 8.571428...，限制贴近但小于真值 -> 返烧
+    body = {
+        "stages": [{"start": 0, "end": 10, "min_temp": "0", "max_temp": "100",
+                    "max_heat_rate": "8.5714285714285714285714285714",
+                    "max_cool_rate": "100"}],
+        "samples": [{"time": 0, "temp": "0"}, {"time": 7, "temp": "1"},
+                    {"time": 10, "temp": "1"}],
+    }
+    resp = post(body)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["conclusion"] == "返烧"
+    rates = [v for v in data["violations"] if v["type"] == "rate"]
+    assert len(rates) == 1
+    assert rates[0]["measured"] == "8.5714285714285714285714285714285714285714285714286"
+    assert rates[0]["limit"] == "8.5714285714285714285714285714"
+    # 限制略高于真值 -> 放行
+    body["stages"][0]["max_heat_rate"] = "8.5714285714285714285714285715"
+    resp = post(body)
+    assert resp.status_code == 200
+    assert resp.json()["conclusion"] == "放行"
 
 
 def test_missing_fields_rejected():

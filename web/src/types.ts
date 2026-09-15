@@ -12,9 +12,10 @@ export interface SampleInput {
   temp: string;
 }
 
+/** 响应中的整数秒字段为十进制字符串：任意大整数都不丢精度。 */
 export interface StageOut {
-  start: number;
-  end: number;
+  start: string;
+  end: string;
   min_temp: string;
   max_temp: string;
   max_heat_rate: string;
@@ -22,13 +23,13 @@ export interface StageOut {
 }
 
 export interface SampleOut {
-  time: number;
+  time: string;
   temp: string;
 }
 
 export interface TemperatureViolation {
   type: "temperature";
-  time: number;
+  time: string;
   temperature: string;
   min_temp: string;
   max_temp: string;
@@ -37,8 +38,8 @@ export interface TemperatureViolation {
 
 export interface RateViolation {
   type: "rate";
-  start_time: number;
-  end_time: number;
+  start_time: string;
+  end_time: string;
   direction: "heating" | "cooling";
   measured: string;
   limit: string;

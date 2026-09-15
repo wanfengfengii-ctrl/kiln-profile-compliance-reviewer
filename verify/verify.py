@@ -114,7 +114,8 @@ def check_release_via_web():
     assert body["conclusion"] == "放行", body
     assert body["violations"] == [], body
     assert len(body["samples"]) == 12 and len(body["stages"]) == 3
-    assert body["samples"][-1] == {"time": 12600, "temp": "880"}
+    # 整数秒以十进制字符串精确回传
+    assert body["samples"][-1] == {"time": "12600", "temp": "880"}
 
 
 @check("违规曲线 -> 返烧，温度违规在前、速率违规在后且字段完整")
@@ -125,11 +126,11 @@ def check_refire_via_web():
     violations = body["violations"]
     assert [v["type"] for v in violations] == ["temperature", "rate", "rate"], violations
     temp_v = violations[0]
-    assert temp_v["time"] == 1200 and temp_v["temperature"] == "500", temp_v
+    assert temp_v["time"] == "1200" and temp_v["temperature"] == "500", temp_v
     heat_v, cool_v = violations[1], violations[2]
-    assert (heat_v["start_time"], heat_v["end_time"]) == (0, 1200), heat_v
+    assert (heat_v["start_time"], heat_v["end_time"]) == ("0", "1200"), heat_v
     assert heat_v["measured"] == "24" and heat_v["limit"] == "4.0", heat_v
-    assert (cool_v["start_time"], cool_v["end_time"]) == (1200, 2400), cool_v
+    assert (cool_v["start_time"], cool_v["end_time"]) == ("1200", "2400"), cool_v
     assert cool_v["measured"] == "16" and cool_v["limit"] == "2.0", cool_v
 
 
@@ -145,6 +146,54 @@ def check_invalid_rejected():
 def check_api_direct():
     status, body = http("POST", f"{API_URL}/api/adjudicate", VALID_BODY)
     assert status == 200 and body["conclusion"] == "放行", f"got {status}: {body}"
+
+
+@check("速率贴近 60/7 时按有理数精确判定（1°C/7s 超限不得误判放行）")
+def check_rate_near_60_over_7():
+    body = {
+        "stages": [{"start": 0, "end": 10, "min_temp": "0", "max_temp": "100",
+                    "max_heat_rate": "8.5714285714285714285714285714",
+                    "max_cool_rate": "100"}],
+        "samples": [{"time": 0, "temp": "0"}, {"time": 7, "temp": "1"},
+                    {"time": 10, "temp": "1"}],
+    }
+    status, resp = http("POST", f"{WEB_URL}/api/adjudicate", body)
+    assert status == 200, f"got {status}: {resp}"
+    assert resp["conclusion"] == "返烧", resp
+    rates = [v for v in resp["violations"] if v["type"] == "rate"]
+    assert len(rates) == 1, resp
+    assert rates[0]["measured"] == "8.5714285714285714285714285714285714285714285714286"
+    assert rates[0]["limit"] == "8.5714285714285714285714285714"
+    # 限制略高于真值 -> 放行
+    body["stages"][0]["max_heat_rate"] = "8.5714285714285714285714285715"
+    status, resp = http("POST", f"{WEB_URL}/api/adjudicate", body)
+    assert status == 200 and resp["conclusion"] == "放行", f"got {status}: {resp}"
+
+
+@check("超出安全整数范围的秒数精确传输与裁决")
+def check_huge_integer_seconds():
+    big1 = 9007199254740993   # 2**53 + 1，浮点无法精确表示
+    big2 = 90071992547409930
+    body = {
+        "stages": [
+            {"start": 0, "end": big1, "min_temp": "15", "max_temp": "260",
+             "max_heat_rate": "5.0", "max_cool_rate": "5.0"},
+            {"start": str(big1), "end": str(big2), "min_temp": "250", "max_temp": "950",
+             "max_heat_rate": "5.0", "max_cool_rate": "5.0"},
+        ],
+        "samples": [
+            {"time": 0, "temp": "20"},
+            {"time": str(big1), "temp": "260"},
+            {"time": big2, "temp": "270"},
+        ],
+    }
+    status, resp = http("POST", f"{WEB_URL}/api/adjudicate", body)
+    assert status == 200, f"got {status}: {resp}"
+    assert resp["conclusion"] == "放行", resp
+    assert resp["stages"][0]["end"] == "9007199254740993", resp
+    assert resp["stages"][1]["start"] == "9007199254740993", resp
+    assert resp["samples"][1]["time"] == "9007199254740993", resp
+    assert resp["samples"][2]["time"] == "90071992547409930", resp
 
 
 def main():

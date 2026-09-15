@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { AdjudicationResult } from "../types";
@@ -8,8 +8,8 @@ const releaseResult: AdjudicationResult = {
   violations: [],
   stages: [
     {
-      start: 0,
-      end: 100,
+      start: "0",
+      end: "100",
       min_temp: "0",
       max_temp: "100",
       max_heat_rate: "5.0",
@@ -17,9 +17,9 @@ const releaseResult: AdjudicationResult = {
     },
   ],
   samples: [
-    { time: 0, temp: "10" },
-    { time: 50, temp: "20" },
-    { time: 100, temp: "30" },
+    { time: "0", temp: "10" },
+    { time: "50", temp: "20" },
+    { time: "100", temp: "30" },
   ],
 };
 
@@ -28,7 +28,7 @@ const refireResult: AdjudicationResult = {
   violations: [
     {
       type: "temperature",
-      time: 50,
+      time: "50",
       temperature: "500",
       min_temp: "0",
       max_temp: "100",
@@ -36,8 +36,8 @@ const refireResult: AdjudicationResult = {
     },
     {
       type: "rate",
-      start_time: 0,
-      end_time: 50,
+      start_time: "0",
+      end_time: "50",
       direction: "heating",
       measured: "24.0",
       limit: "5.0",
@@ -46,9 +46,9 @@ const refireResult: AdjudicationResult = {
   ],
   stages: releaseResult.stages,
   samples: [
-    { time: 0, temp: "10" },
-    { time: 50, temp: "500" },
-    { time: 100, temp: "30" },
+    { time: "0", temp: "10" },
+    { time: "50", temp: "500" },
+    { time: "100", temp: "30" },
   ],
 };
 
@@ -87,9 +87,10 @@ describe("复核台", () => {
     expect(chart.querySelectorAll("circle.point")).toHaveLength(3);
     expect(chart.querySelector("polyline")).not.toBeNull();
 
-    // 请求体：整数秒字段发送 number，温度保持字符串
+    // 请求体：整数秒以字符串原样发送（避免大整数浮点改写），温度保持字符串
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.stages[0].start).toBe(0);
+    expect(body.stages[0].start).toBe("0");
+    expect(body.samples[0].time).toBe("0");
     expect(typeof body.samples[0].temp).toBe("string");
 
     // 下载 JSON 与同次响应完全一致
@@ -113,6 +114,27 @@ describe("复核台", () => {
     });
     expect(JSON.parse(text)).toEqual(releaseResult);
     clickSpy.mockRestore();
+  });
+
+  it("超出安全整数范围的秒数原样发送、不被改写", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(true, 200, releaseResult));
+    render(<App />);
+    // 9007199254740993 = 2**53 + 1，Number() 会改写为 9007199254740992
+    fireEvent.change(screen.getByTestId("stage-0-end"), {
+      target: { value: "9007199254740993" },
+    });
+    fireEvent.change(screen.getByTestId("sample-1-time"), {
+      target: { value: "9007199254740993" },
+    });
+    await clickAdjudicate();
+    await screen.findByTestId("conclusion-banner");
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.stages[0].end).toBe("9007199254740993");
+    expect(body.samples[1].time).toBe("9007199254740993");
+    // 编辑器中的值也不被改写
+    expect(screen.getByTestId("stage-0-end")).toHaveValue("9007199254740993");
+    expect(screen.getByTestId("sample-1-time")).toHaveValue("9007199254740993");
   });
 
   it("返烧结论：违规定位列表与图中红色标记", async () => {

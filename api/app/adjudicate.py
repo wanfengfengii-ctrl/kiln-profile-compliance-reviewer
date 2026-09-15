@@ -10,7 +10,8 @@
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, localcontext
+from fractions import Fraction
 from typing import Dict, List, Sequence
 
 from .schemas import SampleIn, StageIn
@@ -18,10 +19,29 @@ from .schemas import SampleIn, StageIn
 RELEASE = "放行"
 REFIRE = "返烧"
 
+# 实测速率展示用的十进制有效位数（判定本身用有理数精确比较，不依赖该精度）
+RATE_DISPLAY_PRECISION = 50
+
 
 def dec_str(d: Decimal) -> str:
     """十进制数的确定字符串表示（不使用科学计数法，保留完整精度）。"""
     return format(d, "f")
+
+
+def rate_decimal(delta_temp: Decimal, seconds: int) -> Decimal:
+    """温差×60÷秒差 的十进制高精度值，仅用于展示实测值。"""
+    with localcontext() as ctx:
+        ctx.prec = RATE_DISPLAY_PRECISION
+        return (delta_temp * 60) / seconds
+
+
+def rate_exceeds(delta_temp: Decimal, seconds: int, limit: Decimal) -> bool:
+    """精确判定 温差×60÷秒差 > 限制。
+
+    用有理数比较（温差×60 > 限制×秒差，秒差为正），避免十进制除法舍入
+    在实测值贴近限制时误判（例如 1°C/7s 与贴近 60/7 的限制）。
+    """
+    return Fraction(delta_temp) * 60 > Fraction(limit) * seconds
 
 
 def stage_index_for_time(t: int, stages: Sequence[StageIn]) -> int:
@@ -43,7 +63,7 @@ def adjudicate(stages: Sequence[StageIn], samples: Sequence[SampleIn]) -> Dict:
             temp_violations.append(
                 {
                     "type": "temperature",
-                    "time": s.time,
+                    "time": str(s.time),
                     "temperature": dec_str(s.temp),
                     "min_temp": dec_str(st.min_temp),
                     "max_temp": dec_str(st.max_temp),
@@ -57,31 +77,31 @@ def adjudicate(stages: Sequence[StageIn], samples: Sequence[SampleIn]) -> Dict:
         if i != stage_index_for_time(b.time, stages):
             continue  # 跨阶段不检查
         st = stages[i]
-        seconds = Decimal(b.time - a.time)
+        seconds = b.time - a.time
         if b.temp > a.temp:
-            rate = (b.temp - a.temp) * 60 / seconds
-            if rate > st.max_heat_rate:  # 等于限制合规
+            delta = b.temp - a.temp
+            if rate_exceeds(delta, seconds, st.max_heat_rate):  # 等于限制合规
                 rate_violations.append(
                     {
                         "type": "rate",
-                        "start_time": a.time,
-                        "end_time": b.time,
+                        "start_time": str(a.time),
+                        "end_time": str(b.time),
                         "direction": "heating",
-                        "measured": dec_str(rate),
+                        "measured": dec_str(rate_decimal(delta, seconds)),
                         "limit": dec_str(st.max_heat_rate),
                         "stage_index": i,
                     }
                 )
         elif b.temp < a.temp:
-            rate = (a.temp - b.temp) * 60 / seconds
-            if rate > st.max_cool_rate:  # 等于限制合规
+            delta = a.temp - b.temp
+            if rate_exceeds(delta, seconds, st.max_cool_rate):  # 等于限制合规
                 rate_violations.append(
                     {
                         "type": "rate",
-                        "start_time": a.time,
-                        "end_time": b.time,
+                        "start_time": str(a.time),
+                        "end_time": str(b.time),
                         "direction": "cooling",
-                        "measured": dec_str(rate),
+                        "measured": dec_str(rate_decimal(delta, seconds)),
                         "limit": dec_str(st.max_cool_rate),
                         "stage_index": i,
                     }

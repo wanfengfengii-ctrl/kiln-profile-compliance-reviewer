@@ -1,4 +1,4 @@
-import { RateViolation, SampleOut, StageOut, Violation } from "../types";
+import { RateViolation, SampleOut, StageOut, TemperatureViolation, Violation } from "../types";
 
 interface Props {
   stages: StageOut[];
@@ -13,40 +13,48 @@ const TICKS = 6;
 
 /**
  * 窑温曲线 SVG 折线图：阶段温区带、采样折线、温度违规点与速率违规段定位。
- * 数据完全来自同一次裁决响应。
+ * 数据完全来自同一次裁决响应；整数秒的精确字符串用于标注与违规匹配，
+ * Number 仅用于 SVG 几何定位（不影响裁决与展示文本）。
  */
 export function CurveChart({ stages, samples, violations }: Props) {
-  const points = samples.map((s) => ({ t: s.time, temp: Number(s.temp) }));
+  const points = samples.map((s) => ({
+    raw: s.time,
+    t: Number(s.time),
+    temp: Number(s.temp),
+  }));
   const tempViolationTimes = new Set(
-    violations.filter((v) => v.type === "temperature").map((v) => v.time)
+    violations
+      .filter((v): v is TemperatureViolation => v.type === "temperature")
+      .map((v) => v.time)
   );
   const rateViolations = violations.filter(
     (v): v is RateViolation => v.type === "rate"
   );
 
-  const tMin = stages[0].start;
-  const tMax = stages[stages.length - 1].end;
+  const tMin = Number(stages[0].start);
+  const tMax = Number(stages[stages.length - 1].end);
   const temps = [
     ...points.map((p) => p.temp),
     ...stages.flatMap((s) => [Number(s.min_temp), Number(s.max_temp)]),
   ];
   let yLo = Math.min(...temps);
   let yHi = Math.max(...temps);
-  if (yHi - yLo < 1e-9) {
+  if (!(yHi - yLo > 0)) {
     yLo -= 1;
     yHi += 1;
   }
   const pad = (yHi - yLo) * 0.06;
   yLo -= pad;
   yHi += pad;
+  const xSpan = tMax - tMin > 0 ? tMax - tMin : 1;
 
   const x = (t: number) =>
-    M.left + ((t - tMin) / (tMax - tMin)) * (W - M.left - M.right);
+    M.left + ((t - tMin) / xSpan) * (W - M.left - M.right);
   const y = (temp: number) =>
     H - M.bottom - ((temp - yLo) / (yHi - yLo)) * (H - M.top - M.bottom);
 
   const polyline = points.map((p) => `${x(p.t)},${y(p.temp)}`).join(" ");
-  const pointAt = new Map(points.map((p) => [p.t, p]));
+  const pointAt = new Map(points.map((p) => [p.raw, p]));
 
   const xTicks = Array.from({ length: TICKS }, (_, i) =>
     Math.round(tMin + ((tMax - tMin) * i) / (TICKS - 1))
@@ -68,30 +76,30 @@ export function CurveChart({ stages, samples, violations }: Props) {
       {stages.map((s, i) => (
         <g key={i}>
           <rect
-            x={x(s.start)}
+            x={x(Number(s.start))}
             y={y(Number(s.max_temp))}
-            width={x(s.end) - x(s.start)}
+            width={x(Number(s.end)) - x(Number(s.start))}
             height={y(Number(s.min_temp)) - y(Number(s.max_temp))}
             className="stage-band"
           />
           <line
-            x1={x(s.start)}
+            x1={x(Number(s.start))}
             y1={M.top}
-            x2={x(s.start)}
+            x2={x(Number(s.start))}
             y2={H - M.bottom}
             className="stage-boundary"
           />
           {i === stages.length - 1 && (
             <line
-              x1={x(s.end)}
+              x1={x(Number(s.end))}
               y1={M.top}
-              x2={x(s.end)}
+              x2={x(Number(s.end))}
               y2={H - M.bottom}
               className="stage-boundary"
             />
           )}
           <text
-            x={(x(s.start) + x(s.end)) / 2}
+            x={(x(Number(s.start)) + x(Number(s.end))) / 2}
             y={M.top - 8}
             textAnchor="middle"
             className="stage-label"
@@ -152,14 +160,14 @@ export function CurveChart({ stages, samples, violations }: Props) {
       {/* 采样点（温度违规标红） */}
       {points.map((p) => (
         <circle
-          key={p.t}
+          key={p.raw}
           cx={x(p.t)}
           cy={y(p.temp)}
           r={4.5}
-          className={tempViolationTimes.has(p.t) ? "point violation" : "point"}
-          data-testid={`point-${p.t}`}
+          className={tempViolationTimes.has(p.raw) ? "point violation" : "point"}
+          data-testid={`point-${p.raw}`}
         >
-          <title>{`${p.t}s: ${p.temp}°C`}</title>
+          <title>{`${p.raw}s: ${p.temp}°C`}</title>
         </circle>
       ))}
 
