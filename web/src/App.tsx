@@ -31,13 +31,17 @@ export default function App() {
     new Set()
   );
   const [exposureLoading, setExposureLoading] = useState(false);
-  // 热暴露复核序号：重新裁决（或更新一次复核）即作废旧请求，迟到的响应被丢弃
+  // 热暴露复核序号：重新裁决开始与完成（成功或失败）都会作废旧曲线的
+  // 在途复核，迟到的响应被丢弃，不得覆盖新结果区
   const exposureSeq = useRef(0);
 
   const clearExposure = () => {
+    // 作废旧曲线的在途热暴露复核：其迟到响应不得进入新结果区
+    exposureSeq.current += 1;
     setExposureReport(null);
     setExposureError(null);
     setExposureErrorStages(new Set());
+    setExposureLoading(false);
   };
 
   const runAdjudication = async () => {

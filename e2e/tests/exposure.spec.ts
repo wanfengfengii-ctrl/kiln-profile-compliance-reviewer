@@ -136,4 +136,50 @@ test.describe("热暴露复核（真实联调）", () => {
       /exposure-row-error/
     );
   });
+
+  test("重新裁决等待返回时复核旧曲线：裁决完成后到达的旧报告不进入新结果区", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    // 第二次起裁决延迟 1.5s 返回；热暴露复核延迟 3s，保证晚于新裁决到达
+    let adjudicateCalls = 0;
+    await page.route("**/api/adjudicate", async (route) => {
+      adjudicateCalls += 1;
+      if (adjudicateCalls >= 2) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      await route.continue();
+    });
+    await page.route("**/api/exposure", async (route) => {
+      await new Promise((r) => setTimeout(r, 3000));
+      await route.continue();
+    });
+
+    // 第一次裁决（不延迟）：旧曲线结果区展示
+    await page.getByTestId("adjudicate-button").click();
+    await expect(page.getByTestId("conclusion-banner")).toBeVisible();
+
+    // 重新裁决（等待返回中），随后立即复核旧曲线的热暴露
+    await page.getByTestId("adjudicate-button").click();
+    const lateExposure = page.waitForResponse("**/api/exposure");
+    await page.getByTestId("exposure-min-0").fill("7500");
+    await page.getByTestId("exposure-max-0").fill("7500");
+    await page.getByTestId("exposure-min-1").fill("37200");
+    await page.getByTestId("exposure-max-1").fill("37200");
+    await page.getByTestId("exposure-min-2").fill("650");
+    await page.getByTestId("exposure-max-2").fill("650");
+    await page.getByTestId("exposure-button").click();
+
+    // 新裁决先返回：按钮恢复可用，新结果区展示
+    await expect(page.getByTestId("adjudicate-button")).toBeEnabled();
+    await expect(page.getByTestId("conclusion-banner")).toContainText(
+      "结论：放行"
+    );
+
+    // 旧曲线的暴露报告在新裁决完成后到达：必须丢弃
+    await lateExposure;
+    await expect(page.getByTestId("exposure-report")).toHaveCount(0);
+    await expect(page.getByTestId("exposure-error-banner")).toHaveCount(0);
+    await expect(page.getByTestId("exposure-button")).toBeEnabled();
+  });
 });

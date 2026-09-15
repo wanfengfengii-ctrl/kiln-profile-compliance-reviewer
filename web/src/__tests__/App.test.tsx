@@ -414,6 +414,74 @@ describe("热暴露复核", () => {
     );
   });
 
+  it("重新裁决等待返回时复核旧曲线：裁决完成后到达的旧报告不进入新结果区", async () => {
+    await adjudicateWithExposureStages();
+
+    // 重新裁决：请求挂起未返回
+    let resolveAdjudicate!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveAdjudicate = resolve))
+    );
+    await clickAdjudicate();
+
+    // 等待返回期间再次复核旧曲线热暴露：请求同样挂起
+    let resolveExposure!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveExposure = resolve))
+    );
+    fireEvent.click(screen.getByTestId("exposure-button"));
+
+    // 新裁决先返回：新结果区展示
+    await act(async () => {
+      resolveAdjudicate(mockResponse(true, 200, exposureAdjudication));
+    });
+    expect(screen.getByTestId("conclusion-banner")).toHaveTextContent(
+      "结论：放行"
+    );
+
+    // 旧曲线的暴露报告随后到达：必须丢弃，不得进入新结果区
+    await act(async () => {
+      resolveExposure(mockResponse(true, 200, exposureResponse));
+    });
+    expect(screen.queryByTestId("exposure-report")).toBeNull();
+    expect(screen.queryByTestId("exposure-error-banner")).toBeNull();
+    expect(screen.getByTestId("exposure-button")).toBeEnabled();
+  });
+
+  it("重新裁决等待返回时复核旧曲线：裁决完成后到达的旧错误也不进入新结果区", async () => {
+    await adjudicateWithExposureStages();
+
+    let resolveAdjudicate!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveAdjudicate = resolve))
+    );
+    await clickAdjudicate();
+
+    let resolveExposure!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveExposure = resolve))
+    );
+    fireEvent.click(screen.getByTestId("exposure-button"));
+
+    await act(async () => {
+      resolveAdjudicate(mockResponse(true, 200, exposureAdjudication));
+    });
+
+    // 旧复核的 422 在新裁决完成后到达：同样丢弃
+    await act(async () => {
+      resolveExposure(
+        mockResponse(false, 422, {
+          detail: [{ loc: ["body", "exposure", 0], msg: "窗口错误" }],
+        })
+      );
+    });
+    expect(screen.queryByTestId("exposure-error-banner")).toBeNull();
+    expect(screen.queryByTestId("exposure-report")).toBeNull();
+    expect(screen.getByTestId("exposure-row-0").className).not.toContain(
+      "exposure-row-error"
+    );
+  });
+
   it("新一次裁决清除旧暴露报告并重置窗口", async () => {
     await adjudicateWithExposureStages();
     fillWindows([
