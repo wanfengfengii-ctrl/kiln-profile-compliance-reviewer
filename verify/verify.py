@@ -196,6 +196,99 @@ def check_huge_integer_seconds():
     assert resp["samples"][2]["time"] == "90071992547409930", resp
 
 
+@check("热暴露：单段全程高于阈值，梯形面积精确累计")
+def check_exposure_single_stage_above_threshold():
+    body = {
+        "stages": [{"start": 0, "end": 3600, "min_temp": "15", "max_temp": "260",
+                    "max_heat_rate": "4.0", "max_cool_rate": "2.0"}],
+        "samples": [{"time": 0, "temp": "20"}, {"time": 3600, "temp": "160"}],
+        # 超出量 5 -> 145 线性：(5+145)/2*3600 = 270000 °C·s = 4500 °C·min
+        "exposure": [{"min_exposure": "4500", "max_exposure": "4500"}],
+    }
+    status, resp = http("POST", f"{WEB_URL}/api/exposure", body)
+    assert status == 200, f"got {status}: {resp}"
+    [r] = resp["results"]
+    assert r["stage_index"] == 0, r
+    assert r["exposure"] == "4500/1", r
+    assert r["exposure_display"] == "4500.000000", r
+    assert r["status"] == "合格", r  # 恰等于上下限判合格
+
+
+@check("热暴露：阈值穿越并跨阶段，边界插值切开后按精确分数返回")
+def check_exposure_crossing_and_cross_stage():
+    body = {
+        "stages": [
+            {"start": 0, "end": 100, "min_temp": "10", "max_temp": "1000",
+             "max_heat_rate": "1000", "max_cool_rate": "1000"},
+            {"start": 100, "end": 200, "min_temp": "50", "max_temp": "1000",
+             "max_heat_rate": "1000", "max_cool_rate": "1000"},
+        ],
+        # 线段 0->150 跨阶段边界 t=100（无采样点），阶段1 内在 t=5 穿越阈值 10
+        "samples": [{"time": 0, "temp": "0"}, {"time": 150, "temp": "300"},
+                    {"time": 200, "temp": "100"}],
+        "exposure": [
+            {"min_exposure": "150.416666", "max_exposure": "150.416667"},
+            {"min_exposure": "291.666666", "max_exposure": "291.666667"},
+        ],
+    }
+    status, resp = http("POST", f"{WEB_URL}/api/exposure", body)
+    assert status == 200, f"got {status}: {resp}"
+    results = resp["results"]
+    assert results[0]["exposure"] == "1805/12", results          # 9025/60 约分
+    assert results[0]["exposure_display"] == "150.416667", results
+    assert results[0]["status"] == "合格", results
+    assert results[1]["exposure"] == "875/3", results            # 17500/60 约分
+    assert results[1]["exposure_display"] == "291.666667", results
+    assert results[1]["status"] == "合格", results
+
+
+@check("热暴露：恰等于上下限判合格，不足/合格/过量按精确值判定")
+def check_exposure_equal_bounds_and_statuses():
+    # 默认曲线各段精确热暴露：7500、37200、650 °C·min
+    body = json.loads(json.dumps(VALID_BODY))
+    body["exposure"] = [
+        {"min_exposure": "7500", "max_exposure": "7500"},
+        {"min_exposure": "37200", "max_exposure": "37200"},
+        {"min_exposure": "650", "max_exposure": "650"},
+    ]
+    status, resp = http("POST", f"{WEB_URL}/api/exposure", body)
+    assert status == 200, f"got {status}: {resp}"
+    results = resp["results"]
+    assert [r["stage_index"] for r in results] == [0, 1, 2], results
+    assert [r["status"] for r in results] == ["合格"] * 3, results
+    assert [r["exposure"] for r in results] == ["7500/1", "37200/1", "650/1"], results
+    assert [r["exposure_display"] for r in results] == [
+        "7500.000000", "37200.000000", "650.000000"], results
+    # 窗口略偏即不足/过量（精确比较，不受展示值舍入影响）
+    body["exposure"] = [
+        {"min_exposure": "7500.000001", "max_exposure": "99999"},
+        {"min_exposure": "37200", "max_exposure": "37200"},
+        {"min_exposure": "0", "max_exposure": "649.999999"},
+    ]
+    status, resp = http("POST", f"{WEB_URL}/api/exposure", body)
+    assert status == 200, f"got {status}: {resp}"
+    assert [r["status"] for r in resp["results"]] == ["不足", "合格", "过量"], resp
+
+
+@check("热暴露：多个非法窗口 422，按阶段位置稳定返回全部明细")
+def check_exposure_invalid_windows():
+    body = json.loads(json.dumps(VALID_BODY))
+    body["exposure"] = [
+        {"min_exposure": "-1", "max_exposure": "10"},    # 负数
+        {"min_exposure": "100", "max_exposure": "200"},  # 合法
+        {"min_exposure": "9", "max_exposure": "1"},      # 下限高于上限
+    ]
+    status, resp = http("POST", f"{WEB_URL}/api/exposure", body)
+    assert status in (400, 422), f"got {status}: {resp}"
+    assert resp and "detail" in resp, resp
+    assert "results" not in (resp or {}), resp
+    locs = [tuple(item["loc"]) for item in resp["detail"]]
+    assert ("body", "exposure", 0, "min_exposure") in locs, locs
+    assert ("body", "exposure", 2) in locs, locs
+    positions = [loc[2] for loc in locs if loc[:2] == ("body", "exposure")]
+    assert positions == sorted(positions) == [0, 2], locs
+
+
 def main():
     print(f"验收目标：WEB={WEB_URL} API={API_URL}")
     if not wait_ready():

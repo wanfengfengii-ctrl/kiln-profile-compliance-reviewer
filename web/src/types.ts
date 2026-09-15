@@ -57,3 +57,27 @@ export interface AdjudicationResult {
   stages: StageOut[];
   samples: SampleOut[];
 }
+
+/** 每段允许热暴露窗口的输入（°C·min）。 */
+export interface ExposureWindowInput {
+  min_exposure: string;
+  max_exposure: string;
+}
+
+export type ExposureStatus = "不足" | "合格" | "过量";
+
+/** 一段的热暴露复核结果（与放行/返烧结论相互独立）。 */
+export interface ExposureResult {
+  stage_index: number;
+  /** 精确热暴露量（°C·min）：“分子/分母”最简分数 */
+  exposure: string;
+  /** 四舍五入六位小数的展示值 */
+  exposure_display: string;
+  min_exposure: string;
+  max_exposure: string;
+  status: ExposureStatus;
+}
+
+export interface ExposureResponse {
+  results: ExposureResult[];
+}

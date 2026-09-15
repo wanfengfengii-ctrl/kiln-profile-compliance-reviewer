@@ -247,3 +247,32 @@ button.primary:hover:not(:disabled) {
 .violation-rate {
   color: #c2410c;
 }
+
+.hint {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.exposure-ok {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.exposure-below {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.exposure-above {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.exposure-row-error {
+  background: #fef2f2;
+}
+
+.exposure-row-error input {
+  border-color: #dc2626;
+}

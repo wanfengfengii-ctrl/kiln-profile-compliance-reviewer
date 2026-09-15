@@ -5,7 +5,8 @@
 - 温度为有限十进制数（允许负值），最低温度不得高于最高温度；
 - 最大升温、降温速率为有限非负十进制数；
 - 采样时间为非负整数秒、严格递增、不得越出阶段总范围，并覆盖首末端点；
-- 采样温度为有限十进制数。
+- 采样温度为有限十进制数；
+- 热暴露上下限为有限非负十进制数，且下限不高于上限。
 """
 from __future__ import annotations
 
@@ -108,29 +109,83 @@ class SampleIn(BaseModel):
     _decimals = field_validator("temp", mode="before")(to_finite_decimal)
 
 
+def check_stages_samples(stages: List[StageIn], samples: List[SampleIn]) -> None:
+    """阶段与采样的整体一致性校验（/api/adjudicate 与 /api/exposure 共用）。"""
+    for prev, cur in zip(stages, stages[1:]):
+        if prev.end != cur.start:
+            raise ValueError(
+                f"阶段必须首尾相接：上一阶段 end={prev.end}，下一阶段 start={cur.start}"
+            )
+    lo, hi = stages[0].start, stages[-1].end
+    times = [s.time for s in samples]
+    for a, b in zip(times, times[1:]):
+        if b <= a:
+            raise ValueError(f"采样时间必须严格递增：{a} 之后出现 {b}")
+    if times[0] != lo or times[-1] != hi:
+        raise ValueError(
+            f"采样必须覆盖首末端点：首采样时间={times[0]}（应={lo}），"
+            f"末采样时间={times[-1]}（应={hi}）"
+        )
+    for t in times:
+        if t < lo or t > hi:
+            raise ValueError(f"采样时间 {t} 越出阶段总范围 [{lo}, {hi}]")
+
+
+def to_non_neg_finite_decimal(value: Any) -> Decimal:
+    """有限非负十进制数（热暴露上下限用）。"""
+    d = to_finite_decimal(value)
+    if d < 0:
+        raise ValueError(f"必须是有限非负十进制数，收到: {format(d, 'f')}")
+    return d
+
+
 class AdjudicateRequest(BaseModel):
     stages: List[StageIn] = Field(min_length=1)
     samples: List[SampleIn] = Field(min_length=2)
 
     @model_validator(mode="after")
     def check_request(self) -> "AdjudicateRequest":
-        stages, samples = self.stages, self.samples
-        for prev, cur in zip(stages, stages[1:]):
-            if prev.end != cur.start:
-                raise ValueError(
-                    f"阶段必须首尾相接：上一阶段 end={prev.end}，下一阶段 start={cur.start}"
-                )
-        lo, hi = stages[0].start, stages[-1].end
-        times = [s.time for s in samples]
-        for a, b in zip(times, times[1:]):
-            if b <= a:
-                raise ValueError(f"采样时间必须严格递增：{a} 之后出现 {b}")
-        if times[0] != lo or times[-1] != hi:
+        check_stages_samples(self.stages, self.samples)
+        return self
+
+
+class ExposureWindowIn(BaseModel):
+    """一个阶段的允许热暴露窗口（°C·min）：有限非负，下限不高于上限。"""
+
+    min_exposure: Decimal
+    max_exposure: Decimal
+
+    _decimals = field_validator("min_exposure", "max_exposure", mode="before")(
+        to_non_neg_finite_decimal
+    )
+
+    @model_validator(mode="after")
+    def check_window(self) -> "ExposureWindowIn":
+        if self.min_exposure > self.max_exposure:
             raise ValueError(
-                f"采样必须覆盖首末端点：首采样时间={times[0]}（应={lo}），"
-                f"末采样时间={times[-1]}（应={hi}）"
+                "最低允许热暴露量不得高于最高允许热暴露量："
+                f"{format(self.min_exposure, 'f')} > {format(self.max_exposure, 'f')}"
             )
-        for t in times:
-            if t < lo or t > hi:
-                raise ValueError(f"采样时间 {t} 越出阶段总范围 [{lo}, {hi}]")
+        return self
+
+
+class ExposureRequest(BaseModel):
+    """热暴露复核请求：阶段与采样同 /api/adjudicate，另加每段暴露窗口。
+
+    窗口数量必须与阶段数一致；多个窗口的输入错误按阶段输入位置稳定
+    返回全部明细（loc 含 exposure 列表下标）。
+    """
+
+    stages: List[StageIn] = Field(min_length=1)
+    samples: List[SampleIn] = Field(min_length=2)
+    exposure: List[ExposureWindowIn] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def check_request(self) -> "ExposureRequest":
+        check_stages_samples(self.stages, self.samples)
+        if len(self.exposure) != len(self.stages):
+            raise ValueError(
+                f"暴露窗口数量必须与阶段数一致：收到 {len(self.exposure)} 个窗口、"
+                f"{len(self.stages)} 个阶段"
+            )
         return self
