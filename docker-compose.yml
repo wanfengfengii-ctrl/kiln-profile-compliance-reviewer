@@ -1,0 +1,48 @@
+name: kiln-review
+
+# 默认 `docker compose up` 仅运行 Web 与 API 两个服务；
+# verify 为一次性验收服务，位于独立 profile，需显式触发（见 README）。
+services:
+  api:
+    build: ./api
+    image: kiln-review-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health',timeout=3).status==200 else 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  web:
+    build: ./web
+    image: kiln-review-web
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  verify:
+    build: ./verify
+    image: kiln-review-verify
+    profiles: ["verify"]
+    environment:
+      WEB_URL: http://web
+      API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy

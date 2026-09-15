@@ -1,0 +1,14 @@
+# 依赖与产物
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.vitest/
+coverage/
+
+# 环境与工具
+.env
+.DS_Store
+test-results/
+playwright-report/
