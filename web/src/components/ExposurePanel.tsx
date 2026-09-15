@@ -10,6 +10,8 @@ interface Props {
   windows: ExposureWindowInput[];
   report: ExposureResult[] | null;
   error: string | null;
+  /** input：窗口输入错误（422）；failure：连接失败或服务故障 */
+  errorKind: "input" | "failure";
   errorStages: ReadonlySet<number>;
   loading: boolean;
   onWindowChange: (
@@ -36,6 +38,7 @@ export function ExposurePanel({
   windows,
   report,
   error,
+  errorKind,
   errorStages,
   loading,
   onWindowChange,
@@ -103,7 +106,9 @@ export function ExposurePanel({
           className="error-banner"
           role="alert"
         >
-          热暴露窗口输入错误，已拒绝复核：{error}
+          {errorKind === "input"
+            ? `热暴露窗口输入错误，已拒绝复核：${error}`
+            : `热暴露复核失败：${error}`}
         </div>
       )}
 

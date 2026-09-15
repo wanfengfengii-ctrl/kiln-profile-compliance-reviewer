@@ -77,4 +77,63 @@ test.describe("热暴露复核（真实联调）", () => {
       "结论：放行"
     );
   });
+
+  test("热暴露复核未返回时重新裁决：迟到的旧报告不覆盖新结果区", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByTestId("adjudicate-button").click();
+    await expect(page.getByTestId("conclusion-banner")).toBeVisible();
+
+    // 让 /api/exposure 的响应延迟返回，模拟复核在途
+    await page.route("**/api/exposure", async (route) => {
+      await new Promise((r) => setTimeout(r, 1200));
+      await route.continue();
+    });
+    const lateResponse = page.waitForResponse("**/api/exposure");
+    await page.getByTestId("exposure-min-0").fill("7500");
+    await page.getByTestId("exposure-max-0").fill("7500");
+    await page.getByTestId("exposure-min-1").fill("37200");
+    await page.getByTestId("exposure-max-1").fill("37200");
+    await page.getByTestId("exposure-min-2").fill("650");
+    await page.getByTestId("exposure-max-2").fill("650");
+    await page.getByTestId("exposure-button").click();
+
+    // 旧复核尚未返回时修改采样并重新裁决（新曲线、新结果区）
+    await page.getByTestId("sample-1-temp").fill("101");
+    await page.getByTestId("adjudicate-button").click();
+    await expect(page.getByTestId("conclusion-banner")).toContainText("结论：");
+
+    // 旧复核响应到达后也不得出现在新结果区
+    await lateResponse;
+    await expect(page.getByTestId("exposure-report")).toHaveCount(0);
+    await expect(page.getByTestId("exposure-error-banner")).toHaveCount(0);
+    await expect(page.getByTestId("exposure-button")).toBeEnabled();
+  });
+
+  test("热暴露复核服务连接失败：不误报为窗口输入错误", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("adjudicate-button").click();
+    await expect(page.getByTestId("conclusion-banner")).toBeVisible();
+
+    // 拦截 /api/exposure 并中止，模拟服务连接失败
+    await page.route("**/api/exposure", (route) => route.abort());
+    await page.getByTestId("exposure-min-0").fill("7500");
+    await page.getByTestId("exposure-max-0").fill("7500");
+    await page.getByTestId("exposure-min-1").fill("37200");
+    await page.getByTestId("exposure-max-1").fill("37200");
+    await page.getByTestId("exposure-min-2").fill("650");
+    await page.getByTestId("exposure-max-2").fill("650");
+    await page.getByTestId("exposure-button").click();
+
+    const error = page.getByTestId("exposure-error-banner");
+    await expect(error).toBeVisible();
+    await expect(error).toContainText("热暴露复核失败");
+    await expect(error).toContainText("无法连接复核服务");
+    await expect(error).not.toContainText("输入错误");
+    // 连接失败不定位任何阶段
+    await expect(page.getByTestId("exposure-row-0")).not.toHaveClass(
+      /exposure-row-error/
+    );
+  });
 });

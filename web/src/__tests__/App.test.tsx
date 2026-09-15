@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { AdjudicationResult, ExposureResponse } from "../types";
@@ -327,6 +327,7 @@ describe("热暴露复核", () => {
     fireEvent.click(screen.getByTestId("exposure-button"));
 
     const error = await screen.findByTestId("exposure-error-banner");
+    expect(error).toHaveTextContent("热暴露窗口输入错误");
     expect(error).toHaveTextContent("最低允许热暴露量不得高于最高允许热暴露量");
     expect(error).toHaveTextContent("必须是有限非负十进制数");
     // 旧暴露报告不残留
@@ -345,7 +346,7 @@ describe("热暴露复核", () => {
     expect(screen.getByTestId("conclusion-banner")).toHaveTextContent("结论：放行");
   });
 
-  it("热暴露请求失败同样清除旧报告", async () => {
+  it("热暴露请求连接失败：清除旧报告且不误报为窗口输入错误", async () => {
     await adjudicateWithExposureStages();
     fetchMock.mockResolvedValueOnce(mockResponse(true, 200, exposureResponse));
     fireEvent.click(screen.getByTestId("exposure-button"));
@@ -355,7 +356,62 @@ describe("热暴露复核", () => {
     fireEvent.click(screen.getByTestId("exposure-button"));
     const error = await screen.findByTestId("exposure-error-banner");
     expect(error).toHaveTextContent("无法连接复核服务");
+    // 连接失败不是窗口输入错误
+    expect(error).toHaveTextContent("热暴露复核失败");
+    expect(error.textContent).not.toContain("输入错误");
     expect(screen.queryByTestId("exposure-report")).toBeNull();
+  });
+
+  it("热暴露复核未返回时重新裁决：迟到的旧报告不覆盖新结果区", async () => {
+    await adjudicateWithExposureStages();
+
+    // 暴露复核请求挂起未返回
+    let resolveExposure!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveExposure = resolve))
+    );
+    fireEvent.click(screen.getByTestId("exposure-button"));
+
+    // 尚未返回时重新裁决（新一次响应）
+    fetchMock.mockResolvedValueOnce(mockResponse(true, 200, exposureAdjudication));
+    await clickAdjudicate();
+    await act(async () => {}); // 让第二次裁决响应落地
+
+    // 旧复核响应迟到：不得覆盖新结果区
+    await act(async () => {
+      resolveExposure(mockResponse(true, 200, exposureResponse));
+    });
+    expect(screen.queryByTestId("exposure-report")).toBeNull();
+    expect(screen.queryByTestId("exposure-error-banner")).toBeNull();
+    expect(screen.getByTestId("exposure-button")).toBeEnabled();
+  });
+
+  it("热暴露复核未返回时重新裁决：迟到的旧错误也不覆盖新结果区", async () => {
+    await adjudicateWithExposureStages();
+
+    let resolveExposure!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveExposure = resolve))
+    );
+    fireEvent.click(screen.getByTestId("exposure-button"));
+
+    fetchMock.mockResolvedValueOnce(mockResponse(true, 200, exposureAdjudication));
+    await clickAdjudicate();
+    await act(async () => {});
+
+    // 旧复核的 422 迟到：同样不得出现在新结果区
+    await act(async () => {
+      resolveExposure(
+        mockResponse(false, 422, {
+          detail: [{ loc: ["body", "exposure", 0], msg: "窗口错误" }],
+        })
+      );
+    });
+    expect(screen.queryByTestId("exposure-error-banner")).toBeNull();
+    expect(screen.queryByTestId("exposure-report")).toBeNull();
+    expect(screen.getByTestId("exposure-row-0").className).not.toContain(
+      "exposure-row-error"
+    );
   });
 
   it("新一次裁决清除旧暴露报告并重置窗口", async () => {

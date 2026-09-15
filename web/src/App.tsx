@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { adjudicate, ApiError, exposure } from "./api";
 import { ConclusionBanner } from "./components/ConclusionBanner";
 import { CurveChart } from "./components/CurveChart";
@@ -24,10 +24,15 @@ export default function App() {
   const [exposureWindows, setExposureWindows] = useState<ExposureWindowInput[]>([]);
   const [exposureReport, setExposureReport] = useState<ExposureResult[] | null>(null);
   const [exposureError, setExposureError] = useState<string | null>(null);
+  const [exposureErrorKind, setExposureErrorKind] = useState<"input" | "failure">(
+    "input"
+  );
   const [exposureErrorStages, setExposureErrorStages] = useState<ReadonlySet<number>>(
     new Set()
   );
   const [exposureLoading, setExposureLoading] = useState(false);
+  // 热暴露复核序号：重新裁决（或更新一次复核）即作废旧请求，迟到的响应被丢弃
+  const exposureSeq = useRef(0);
 
   const clearExposure = () => {
     setExposureReport(null);
@@ -36,6 +41,9 @@ export default function App() {
   };
 
   const runAdjudication = async () => {
+    // 作废旧曲线的在途热暴露复核，其迟到响应不得覆盖新结果区
+    exposureSeq.current += 1;
+    setExposureLoading(false);
     setLoading(true);
     try {
       const r = await adjudicate(stages, samples);
@@ -59,22 +67,27 @@ export default function App() {
 
   const runExposure = async () => {
     if (!result) return;
+    const seq = ++exposureSeq.current;
     setExposureLoading(true);
     try {
       // 阶段与采样取自该次裁决响应，与放行/返烧结论相互独立
       const r = await exposure(result.stages, result.samples, exposureWindows);
+      if (seq !== exposureSeq.current) return; // 已有新裁决/新复核，丢弃旧报告
       setExposureReport(r.results);
       setExposureError(null);
       setExposureErrorStages(new Set());
     } catch (e) {
+      if (seq !== exposureSeq.current) return; // 迟到的旧错误同样丢弃
       // 清除旧暴露报告并定位相应阶段
       setExposureReport(null);
-      setExposureError(e instanceof ApiError ? e.message : "热暴露复核请求失败");
+      const isInput = e instanceof ApiError && e.isInputError;
+      setExposureErrorKind(isInput ? "input" : "failure");
+      setExposureError(e instanceof ApiError ? e.message : "请求失败");
       setExposureErrorStages(
         new Set(e instanceof ApiError ? e.stageIndices : [])
       );
     } finally {
-      setExposureLoading(false);
+      if (seq === exposureSeq.current) setExposureLoading(false);
     }
   };
 
@@ -151,6 +164,7 @@ export default function App() {
             windows={exposureWindows}
             report={exposureReport}
             error={exposureError}
+            errorKind={exposureErrorKind}
             errorStages={exposureErrorStages}
             loading={exposureLoading}
             onWindowChange={(i, key, value) => {

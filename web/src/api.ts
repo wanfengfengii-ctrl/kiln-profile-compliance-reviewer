@@ -11,6 +11,8 @@ import {
 export class ApiError extends Error {
   /** 输入错误定位到的阶段下标（热暴露窗口按阶段位置返回明细时用）。 */
   stageIndices: number[] = [];
+  /** 是否为输入校验错误（HTTP 422）；否则为连接失败或服务故障。 */
+  isInputError = false;
 }
 
 interface ErrorDetailItem {
@@ -124,6 +126,7 @@ export async function exposure(
     const err = new ApiError(
       formatDetail(data) || `请求被拒绝（HTTP ${res.status}）`
     );
+    err.isInputError = res.status === 422;
     err.stageIndices = exposureErrorStageIndices(data);
     throw err;
   }
