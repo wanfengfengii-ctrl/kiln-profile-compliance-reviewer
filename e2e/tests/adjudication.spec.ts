@@ -126,17 +126,23 @@ test.describe("窑温曲线复核台（真实联调）", () => {
     await expect(list).toContainText("8.5714285714285714285714285714");
   });
 
-  test("回归：超出安全整数范围的秒数不改写、不拒绝连续数据", async ({
+  test("回归：超出安全整数范围的秒数不改写、不拒绝连续数据，折线按真实间隔定位", async ({
     page,
   }) => {
     await page.goto("/");
-    // 两阶段：[0, 2^53+1) 与 [2^53+1, 2^53*10]
+    // 两阶段（小跨度、大偏移）：[90071992547409920, 90071992547409925)
+    // 与 [90071992547409925, 90071992547409930]
     await page.getByTestId("stage-remove-2").click();
-    await page.getByTestId("stage-0-end").fill("9007199254740993");
-    await page.getByTestId("stage-1-start").fill("9007199254740993");
+    await page.getByTestId("stage-0-start").fill("90071992547409920");
+    await page.getByTestId("stage-0-end").fill("90071992547409925");
+    await page.getByTestId("stage-1-start").fill("90071992547409925");
     await page.getByTestId("stage-1-end").fill("90071992547409930");
-    // 采样覆盖首末端点：0、2^53+1、2^53*10
-    await page.getByTestId("sample-1-time").fill("9007199254740993");
+    await page.getByTestId("stage-1-max_heat_rate").fill("1000");
+    await page.getByTestId("stage-1-max_cool_rate").fill("1000");
+    // 采样覆盖首末端点
+    await page.getByTestId("sample-0-time").fill("90071992547409920");
+    await page.getByTestId("sample-0-temp").fill("20");
+    await page.getByTestId("sample-1-time").fill("90071992547409925");
     await page.getByTestId("sample-1-temp").fill("260");
     await page.getByTestId("sample-2-time").fill("90071992547409930");
     await page.getByTestId("sample-2-temp").fill("270");
@@ -150,6 +156,17 @@ test.describe("窑温曲线复核台（真实联调）", () => {
     await expect(page.getByTestId("conclusion-banner")).toContainText(
       "结论：放行"
     );
+
+    // 折线按真实时间间隔定位：三个采样点两两不重叠且等距（各 5s）
+    const cxOf = async (t: string) =>
+      Number(await page.getByTestId(`point-${t}`).getAttribute("cx"));
+    const cx1 = await cxOf("90071992547409920");
+    const cx2 = await cxOf("90071992547409925");
+    const cx3 = await cxOf("90071992547409930");
+    expect(cx2).toBeGreaterThan(cx1);
+    expect(cx3).toBeGreaterThan(cx2);
+    expect(cx2 - cx1).toBeCloseTo(cx3 - cx2, 1);
+
     // 下载 JSON 中的秒数与输入逐字一致
     const [download] = await Promise.all([
       page.waitForEvent("download"),
@@ -157,9 +174,11 @@ test.describe("窑温曲线复核台（真实联调）", () => {
     ]);
     const path = await download.path();
     const data = JSON.parse(readFileSync(path!, "utf-8"));
-    expect(data.stages[0].end).toBe("9007199254740993");
-    expect(data.stages[1].start).toBe("9007199254740993");
-    expect(data.samples[1].time).toBe("9007199254740993");
+    expect(data.stages[0].start).toBe("90071992547409920");
+    expect(data.stages[0].end).toBe("90071992547409925");
+    expect(data.stages[1].start).toBe("90071992547409925");
+    expect(data.stages[1].end).toBe("90071992547409930");
+    expect(data.samples[1].time).toBe("90071992547409925");
     expect(data.samples[2].time).toBe("90071992547409930");
   });
 });

@@ -10,16 +10,31 @@ const W = 920;
 const H = 400;
 const M = { top: 28, right: 24, bottom: 46, left: 68 };
 const TICKS = 6;
+const PLOT_W = W - M.left - M.right;
+// x 定位的亚像素精度（微像素），商最大为 PLOT_W × SCALE，远小于 2^53
+const SCALE = 1_000_000n;
+
+/** 响应中的整数秒字符串 -> BigInt（服务端已保证为规范整数）。 */
+function toBig(raw: string): bigint {
+  try {
+    return BigInt(raw);
+  } catch {
+    const n = Number(raw);
+    return Number.isFinite(n) ? BigInt(Math.round(n)) : 0n;
+  }
+}
 
 /**
  * 窑温曲线 SVG 折线图：阶段温区带、采样折线、温度违规点与速率违规段定位。
- * 数据完全来自同一次裁决响应；整数秒的精确字符串用于标注与违规匹配，
- * Number 仅用于 SVG 几何定位（不影响裁决与展示文本）。
+ * 数据完全来自同一次裁决响应。
+ *
+ * x 轴定位使用 BigInt 精确求差再按比例换算到像素：超大整数秒（超出
+ * IEEE 754 安全整数范围）下相邻采样仍按真实时间间隔定位，不会重叠。
  */
 export function CurveChart({ stages, samples, violations }: Props) {
   const points = samples.map((s) => ({
     raw: s.time,
-    t: Number(s.time),
+    t: toBig(s.time),
     temp: Number(s.temp),
   }));
   const tempViolationTimes = new Set(
@@ -31,8 +46,15 @@ export function CurveChart({ stages, samples, violations }: Props) {
     (v): v is RateViolation => v.type === "rate"
   );
 
-  const tMin = Number(stages[0].start);
-  const tMax = Number(stages[stages.length - 1].end);
+  const tMin = toBig(stages[0].start);
+  const tMax = toBig(stages[stages.length - 1].end);
+  const span = tMax - tMin > 0n ? tMax - tMin : 1n;
+
+  // 精确 x 定位：(t - tMin) / span 用整数运算放大到微像素再取商，
+  // 商不超过 PLOT_W × SCALE（约 8.3e8），转 Number 不丢精度
+  const xAt = (t: bigint): number =>
+    M.left + Number(((t - tMin) * BigInt(PLOT_W) * SCALE) / span) / 1e6;
+
   const temps = [
     ...points.map((p) => p.temp),
     ...stages.flatMap((s) => [Number(s.min_temp), Number(s.max_temp)]),
@@ -46,19 +68,22 @@ export function CurveChart({ stages, samples, violations }: Props) {
   const pad = (yHi - yLo) * 0.06;
   yLo -= pad;
   yHi += pad;
-  const xSpan = tMax - tMin > 0 ? tMax - tMin : 1;
 
-  const x = (t: number) =>
-    M.left + ((t - tMin) / xSpan) * (W - M.left - M.right);
   const y = (temp: number) =>
     H - M.bottom - ((temp - yLo) / (yHi - yLo)) * (H - M.top - M.bottom);
 
-  const polyline = points.map((p) => `${x(p.t)},${y(p.temp)}`).join(" ");
+  const polyline = points.map((p) => `${xAt(p.t)},${y(p.temp)}`).join(" ");
   const pointAt = new Map(points.map((p) => [p.raw, p]));
 
-  const xTicks = Array.from({ length: TICKS }, (_, i) =>
-    Math.round(tMin + ((tMax - tMin) * i) / (TICKS - 1))
-  );
+  // 刻度值用精确整数秒（截断取整），并按值去重
+  const xTicks = [
+    ...new Map(
+      Array.from({ length: TICKS }, (_, i) => {
+        const v = tMin + (span * BigInt(i)) / BigInt(TICKS - 1);
+        return [v.toString(), v] as const;
+      })
+    ).values(),
+  ];
   const yTicks = Array.from(
     { length: TICKS },
     (_, i) => yLo + ((yHi - yLo) * i) / (TICKS - 1)
@@ -76,30 +101,30 @@ export function CurveChart({ stages, samples, violations }: Props) {
       {stages.map((s, i) => (
         <g key={i}>
           <rect
-            x={x(Number(s.start))}
+            x={xAt(toBig(s.start))}
             y={y(Number(s.max_temp))}
-            width={x(Number(s.end)) - x(Number(s.start))}
+            width={xAt(toBig(s.end)) - xAt(toBig(s.start))}
             height={y(Number(s.min_temp)) - y(Number(s.max_temp))}
             className="stage-band"
           />
           <line
-            x1={x(Number(s.start))}
+            x1={xAt(toBig(s.start))}
             y1={M.top}
-            x2={x(Number(s.start))}
+            x2={xAt(toBig(s.start))}
             y2={H - M.bottom}
             className="stage-boundary"
           />
           {i === stages.length - 1 && (
             <line
-              x1={x(Number(s.end))}
+              x1={xAt(toBig(s.end))}
               y1={M.top}
-              x2={x(Number(s.end))}
+              x2={xAt(toBig(s.end))}
               y2={H - M.bottom}
               className="stage-boundary"
             />
           )}
           <text
-            x={(x(Number(s.start)) + x(Number(s.end))) / 2}
+            x={(xAt(toBig(s.start)) + xAt(toBig(s.end))) / 2}
             y={M.top - 8}
             textAnchor="middle"
             className="stage-label"
@@ -113,10 +138,10 @@ export function CurveChart({ stages, samples, violations }: Props) {
       <line x1={M.left} y1={H - M.bottom} x2={W - M.right} y2={H - M.bottom} className="axis" />
       <line x1={M.left} y1={M.top} x2={M.left} y2={H - M.bottom} className="axis" />
       {xTicks.map((t) => (
-        <g key={t}>
-          <line x1={x(t)} y1={H - M.bottom} x2={x(t)} y2={H - M.bottom + 5} className="axis" />
-          <text x={x(t)} y={H - M.bottom + 20} textAnchor="middle" className="tick">
-            {t}
+        <g key={t.toString()}>
+          <line x1={xAt(t)} y1={H - M.bottom} x2={xAt(t)} y2={H - M.bottom + 5} className="axis" />
+          <text x={xAt(t)} y={H - M.bottom + 20} textAnchor="middle" className="tick">
+            {t.toString()}
           </text>
         </g>
       ))}
@@ -147,9 +172,9 @@ export function CurveChart({ stages, samples, violations }: Props) {
         return (
           <line
             key={i}
-            x1={x(a.t)}
+            x1={xAt(a.t)}
             y1={y(a.temp)}
-            x2={x(b.t)}
+            x2={xAt(b.t)}
             y2={y(b.temp)}
             className="violation-segment"
             data-testid="rate-violation-segment"
@@ -161,7 +186,7 @@ export function CurveChart({ stages, samples, violations }: Props) {
       {points.map((p) => (
         <circle
           key={p.raw}
-          cx={x(p.t)}
+          cx={xAt(p.t)}
           cy={y(p.temp)}
           r={4.5}
           className={tempViolationTimes.has(p.raw) ? "point violation" : "point"}
